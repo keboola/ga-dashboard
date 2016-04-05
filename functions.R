@@ -1,5 +1,4 @@
 ## functions.R
-library(rga)
 library(dygraphs)
 library(zoo)
 library(tidyr)
@@ -8,63 +7,24 @@ library(d3heatmap)
 library(dplyr)
 library(stringr)
 library(DT)
-library(RMySQL)
 library(CausalImpact)
 library(AnomalyDetection)
 library(ggplot2)
 
-# I have the below in a file I source that is not on github
-message("functions.R called from ", getwd())
-source('secrets.R')
-# secrets.R has this in it:
-# options(mysql = list(
-#   "host" = "xxxx",
-#   "port" = 3306,
-#   "user" = "shinyapps",
-#   "password" = "YOUR USER PW",
-#   "databaseName" = "onlinegashiny"),
-#   rga = list(
-#     "profile_id" = "xxxxxx",
-#     "daysBackToFetch" = 356*3
-#   ),
-#   shinyMulti = list(
-#     "max_plots" = 10
-#   ),
-#   myCausalImpact = list(
-#     'test_time' = 14,
-#     'season' = 7
-#   ),
-#   shiny.maxRequestSize = 0.5*1024^2 ## upload only 0.5 MB
-# )
-
-## Run this locally first, to store the auth token.
-## this is then uploaded with the shiny app for future requests.
-# rga.open(where="token.rga")
-
-get_ga_data <- function(profileID, 
-                        fetch_metrics, 
-                        fetch_dimensions,
-                        fetch_filter = ""){
-  
-  ## Run this locally first, to store the auth token.
-  rga.open(where="token.rga")
-  
-  all_start <-  ga$getFirstDate(profileID)
-  start <- today() - options()$rga$daysBackToFetch
-  yesterday <- today() -1
-  
-  message("# Fetching GA data")
-  ga_data <- ga$getData(ids = profileID,
-                        start.date = start,
-                        end.date = yesterday,
-                        metrics = fetch_metrics,
-                        dimensions = fetch_dimensions,
-                        filters = fetch_filter,
-                        batch = T)
-  
-  return(ga_data)
-  
-}
+options(
+    rga = list(
+        'profile_id' = "",
+        'daysBackToFetch' = 356*3
+    ),
+    shiknyMulti = list(
+        'max_plots' = 10
+    ),
+    myCausalImpact = list(
+        'test_time' = 14,
+        'season' = 7
+    ),
+    shiny.maxRequestSize = 0.5*1024^2 ## upload only 0.5 MB
+)
 
 ## Twitter's AnomalyDetection
 ## https://github.com/twitter/AnomalyDetection
@@ -255,53 +215,6 @@ valueBoxTimeOnTime <- function(data, time_period="month"){
 
 #### MySQL functions
 
-createTable <- function(table_name, data_for_table){
-  require(RMySQL)
-  conn <- dbConnect(MySQL(), dbname = options()$mysql$databaseName, host = options()$mysql$host, 
-                    port = options()$mysql$port, user = options()$mysql$user, 
-                    password = options()$mysql$password)
-  
-  if(dbExistsTable(conn, table_name)){
-    message("Table Exisits: ", table_name)
-  } else {
-    message("Creating Table: ", table_name)
-    dbWriteTable(conn, table_name, value=as.data.frame(data_for_table))
-    dbDisconnect(conn)
-  }
-  
-}
-
-overWriteTable <- function(table_name, data_for_table){
-  require(RMySQL)
-  conn <- dbConnect(MySQL(), dbname = options()$mysql$databaseName, host = options()$mysql$host, 
-                    port = options()$mysql$port, user = options()$mysql$user, 
-                    password = options()$mysql$password)
-  
-  if(!dbExistsTable(conn, table_name)){
-    message("Table Does Not Exisit, Creating: ", table_name)
-    createTable(table_name, data_for_table)
-  } else {
-    message("Overwriting Table: ", table_name)
-    dbRemoveTable(conn, table_name)
-    createTable(table_name, data_for_table)
-  }
-  
-}
-
-loadData <- function(table_name) {
-  # Connect to the database
-  db <- dbConnect(MySQL(), dbname = options()$mysql$databaseName, host = options()$mysql$host, 
-                  port = options()$mysql$port, user = options()$mysql$user, 
-                  password = options()$mysql$password)
-  # Construct the fetching query
-  query <- sprintf("SELECT * FROM %s", table_name)
-  # Submit the fetch query and disconnect
-  data <- dbGetQuery(db, query)
-  dbDisconnect(db)
-  data[,-1]
-}
-
-is.error <- function(x) inherits(x, "try-error")
 
 ### CausalImpact Loop
 

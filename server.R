@@ -1,36 +1,106 @@
 
-# This is the server logic for a Shiny web application.
-# You can find out more about building applications with Shiny here:
-#
-# http://shiny.rstudio.com
-#
-
 library(shiny)
+library(keboola.shiny.lib)
 
 source('functions.R')
 
 ## for the loop over plots
-max_plots <- options()$shinyMulti$max_plots
+max_plots <- 10 # options()$shinyMulti$max_plots
 
 shinyServer(function(input, output, session) {
   
-  message(getwd())
+    # Create instance of keboola/shiny-lib
+    klib <- KeboolaShiny$new()
   
-  ga_data <- reactive({
+    # This is the startup method, it will run whenever the page is loaded
+    keboola <- reactive({
+        
+        # here we create and register a list of our inputs
+        # doing this means that when configs are loaded these inputs will be automatically updated
+        appInputs <- list(
+            list(id="gaTable", type="select")
+        )
+        # in.c-ex-google-analytics-kbcga
+        # start it up
+        # for a full list of options available to the startup method please see the documentation
+        ret <- klib$startup(
+            list(
+                appTitle = "GA Dashboard", 
+                tables="all", 
+                inputList = appInputs, 
+                dataToSave = ga_data,
+                forkButtonRef="https://github.com/keboola/ga-dashboard/fork"
+            )
+        )
+        return(ret$loginInfo)
+    })
     
-    ## get your profile ID of your GA account to pull from
-    gadata <- get_ga_data(profileID = options()$rga$profile_id, 
-                          fetch_metrics = "ga:sessions",
-                          fetch_dimensions = "ga:date,ga:medium",
-                          fetch_filter="")
+    sourceData <- reactive({
+        if (keboola()$ready) {
+            if (FALSE) {
+                updateSelectInput(session,"histCol", choices=names(table))
+                updateSelectInput(session,"boxColor", choices=c("None",names(table[maybeFactors])))
+                updateSelectInput(session,"boxX", choices=names(table))
+                updateSelectInput(session,"boxY", choices=names(table))
+                updateSelectInput(session,"scatterColor", choices=c("None", names(table[maybeFactors])))
+                updateSelectInput(session,"scatterFacet", choices=c(None = ".", names(table[maybeFactors])))
+                updateSelectInput(session,"scatterY", choices=names(table))
+                updateSelectInput(session,"scatterX", choices=names(table))
+            }
+            sd <- klib$sourceData()()
+            print("HERES SOuRCEDATA")
+            print(names(sd))
+            sd
+            # this library method returns
+            # klib$loadTable("sd",input$table)
+            #table <- klib$sourceData()()[[input$gaTable]]
+            
+            # update data-dependent inputs depending
+            
+            # return the table
+            # table
+        } else {
+            NULL
+        }
+    })
     
-    # get one column per medium plus a total
-    data <- tidyr::spread(gadata, medium, sessions)
-    data$total <- rowSums(as.matrix(data[,-1]), na.rm=T)
+    observe({
+        if (keboola()$ready) {
+            
+            # grab a list of all table objects (meta data about the table, not the actual data)
+            tables <- klib$client$listTables(bucket = klib$bucket)
+            
+            # grab the name of each table object
+            tableNames <- lapply(tables, function(t) { t$name })
+            
+            #update our GA select input element with tablenames
+            updateSelectInput(session,"gaTable",choices=c(tableNames))
+            
+        } else {
+            print("server.R not ready")
+            NULL
+        }
+    })
     
-    data
+    config <- callModule(appConfig,"kb",klib$kfig)
     
-  })
+    ga_data <- reactive({
+        if (input$gaTable != "") {
+            gadata <- sourceData()[[input$gaTable]]
+            
+            gadata$sessions <- as.numeric(gadata$sessions)
+            gadata$date <- as.Date(gadata$date)
+            # remove unused columns
+            gadata$id <- gadata$idprofile <- gadata[['_timestamp']] <- NULL
+            # get totals
+            data <- tidyr::spread(gadata, medium, sessions)
+            data$total <- rowSums(as.matrix(data[,-1]), na.rm=T)
+            
+            data
+        } else {
+            return(NULL)
+        }
+    })
   
   anomalyData <- reactive({
     data <- ga_data()
@@ -39,7 +109,6 @@ shinyServer(function(input, output, session) {
     agg    <- input$agg_select
     
     agg_data <- aggregate_data(data[,c('date', choice)], agg)
-    
     ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = 0.05))
     
     if(!is.error(ad)){
@@ -58,7 +127,6 @@ shinyServer(function(input, output, session) {
     max_a <- input$max_anoms
     
     agg_data <- aggregate_data(data[,c('date', choice)], agg)
-    
     ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = max_a))
     
     if(!is.error(ad)){
@@ -66,36 +134,24 @@ shinyServer(function(input, output, session) {
     } else {
       NULL
     }
-    
   })
   
   output$anomalyPlot <- renderPlot({
-    
     anomalyData2()$plot
-    
   })
   
   output$anomalyTable <- DT::renderDataTable({
     a_table <- anomalyData2()$anoms
-    
     a_table$timestamp <- as.Date(as.character(a_table$timestamp))
-    
     names(a_table) <- c("Anomaly Date", "Value")
-    
     a_table 
-    
-    
   })
   
   output$date_shown <- renderText({
-    
     pdata <- plot_date_data()
-    
     min_date <- as.character(min(pdata$date))
     max_date <- as.character(max(pdata$date))
-    
     paste0(min_date, " to ", max_date)
-    
   })
   
   plot_date_data <- reactive({
@@ -115,7 +171,7 @@ shinyServer(function(input, output, session) {
     
     pdata <- pdata[,colnames(pdata) %in% c("date", choice)]
     
-    
+    pdata
   })
   
   output$heatmap <- renderD3heatmap({
@@ -138,9 +194,14 @@ shinyServer(function(input, output, session) {
     
     hm_data <- tbl_df(hm_data)
     
+    # sum up any duplicates
+    hm_data_grp <- group_by(hm_data,date,wday,week) 
+    hm_data <- summarise(hm_data_grp, sessions = sum(sessions),  na.rm=T)
+    
     hm_f <- tidyr::spread(hm_data[,c("sessions","wday","week")], 
                           wday, 
                           sessions)
+    
     hm_m <- as.matrix(hm_f %>% dplyr::select(-week))
     row.names(hm_m) <- factor(hm_f$week)
     
@@ -153,9 +214,6 @@ shinyServer(function(input, output, session) {
               labRow = row.names(hm_m),
               labCol = colnames(hm_m)
     )
-    
-    
-    
   })
   
   output$current_week <- renderText({
@@ -210,8 +268,7 @@ shinyServer(function(input, output, session) {
         d <- d %>% dyEvent(events$date[i], label = events$eventname[i]) 
       }
     }
-    
-    if(!is.null(anomalies)){
+    if(!is.null(anomalies) && nrow(anomalies) > 0){
       for(i in 1:length(anomalies$timestamp))
         d <- d %>% dyAnnotation(anomalies$timestamp[i], 
                                 text = paste("Anomaly"),
@@ -273,31 +330,21 @@ shinyServer(function(input, output, session) {
         message("No event data found in SQL")
         return(NULL)
       }
-      
-      
     } else {
       uploaded_csv <- try(read.csv(eventUploaded$datapath, stringsAsFactors = F))
-      
       if(!is.error(uploaded_csv)){
         ## check uploaded_csv
-        
         if(all(names(uploaded_csv) %in% c('date', 'eventname'))){
-          
           uploaded_csv <- uploaded_csv[complete.cases(uploaded_csv),]
-          
           ## convert dates
           dates_guessed <- as.Date(uploaded_csv$date,
                                    guess_formats(uploaded_csv$date, 
                                                  c("Y-m-d", "m-d-Y")))
           message("Dates: ", dates_guessed)
           uploaded_csv$date <- dates_guessed
-          
-          uploadBool <- overWriteTable("onlineGAshiny_events", uploaded_csv)
-          
-          if(uploadBool) message("File uploaded successfully.")
-          
+          #uploadBool <- overWriteTable("onlineGAshiny_events", uploaded_csv)
+          #if(uploadBool) message("File uploaded successfully.")
           return(uploaded_csv)          
-          
         } else {
           stop("File did not include 'date' and 'eventname' columns.  Found: ", names(uploaded_csv))
         }       
@@ -310,38 +357,35 @@ shinyServer(function(input, output, session) {
     
   })
   
-  output$eventTable <- DT::renderDataTable({
-    
-    eventData()
-    
-  })
+    output$eventTable <- DT::renderDataTable({
+        eventData()
+    })
   
-  causalImpactData <- reactive({
+    causalImpactData <- reactive({
     
-    ci       <- ga_data()
-    events   <- eventData()
+        ci       <- ga_data()
+        events   <- eventData()
     
-    ts_data <- zoo(ci[,'total'], 
-                   order.by = ci[,'date'])
+        ts_data <- zoo(ci[,'total'], 
+                    order.by = ci[,'date'])
     
-    ci_list <- getCausalImpactList(ts_data, events)
+        ci_list <- getCausalImpactList(ts_data, events)
     
-    ## get data via Reduce(rbind, lapply(events$eventname, function(x) ci_list[[x]]$summary)))
-    
-  })
+        ## get data via Reduce(rbind, lapply(events$eventname, function(x) ci_list[[x]]$summary)))
+    })
   
-  causalTable <- reactive({
-    ci_list <- causalImpactData()
-    events   <- eventData()
+    causalTable <- reactive({
+        ci_list <- causalImpactData()
+        events   <- eventData()
     
-    ## output cumulative totals only
-    ci_l <- plyr::ldply(lapply(events$eventname, function(x) 
-      ci_list[[x]]$summary[row.names(ci_list[[x]]$summary) == "Cumulative",])
-    )
-    ci_l$eventname <- events$eventname
+        ## output cumulative totals only
+        ci_l <- plyr::ldply(lapply(events$eventname, function(x) 
+            ci_list[[x]]$summary[row.names(ci_list[[x]]$summary) == "Cumulative",])
+        )
+        ci_l$eventname <- events$eventname
     
-    ci_l
-  })
+        ci_l
+    })
   
   output$CausalPlotSummary <- renderPlot({
     ct <- causalTable()
@@ -360,9 +404,6 @@ shinyServer(function(input, output, session) {
       print(gg)
       
     }
-    
-    
-    
   })
   
   
@@ -516,9 +557,5 @@ shinyServer(function(input, output, session) {
       
     }) # end local
   } # end loop over plots
-  
-  
-  
-  
   
 })

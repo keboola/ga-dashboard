@@ -7,14 +7,17 @@ library(keboola.shiny.lib)
 
 shinyUI(
     keboolaPage(
-        bootstrapPage(
-            tabsetPanel(
+        dashboardPage(
+            dashboardHeader(disable = TRUE),
+            dashboardSidebar(disable = TRUE),
+            dashboardBody(
+              tabsetPanel(
                 # first tab content
                 tabPanel("Dashboard",
-                    h1("Executive Summary"),
                     fluidRow(  #row 1
-                        box(width=6, height="200px",title="Select Data", solidHeader = T, status = "primary",
-                            selectInput("gaTable", "GA Table", choices=c()),
+                        box(width=4, height="150px",
+                            selectInput("gaTable", "GA Table", choices=c())),
+                        box(width=4, height="150px",title="Select Data", solidHeader = T, status = "primary",
                             selectInput("medium_select", 
                                         "Select Traffic Channel",
                                         choices = c("All" = "total",
@@ -25,7 +28,7 @@ shinyUI(
                                                     "Social" = "social")),
                             helpText("Select which channel to show in the plots below.  For demo purposes it loads sessions, but could easily be revenue, goals or other metrics and segments.")
                         ),
-                        box(width=6, height="200px",title = "What is this?", solidHeader = T, status = "info",
+                        box(width=4, height="150px",title = "What is this?", solidHeader = T, status = "info",
                             p("This is a demo Google Analytics dashboard using R, Shiny and various other features."),
                             p("Check out the source code via the Github link to the left. ")
                         )
@@ -127,6 +130,7 @@ shinyUI(
                         )
                     )
                 )
+              )
             )
         ), appTitle = "GA Dashboard"
     )

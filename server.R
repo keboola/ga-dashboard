@@ -37,28 +37,22 @@ shinyServer(function(input, output, session) {
     
     sourceData <- reactive({
         if (keboola()$ready) {
-            if (FALSE) {
-                updateSelectInput(session,"histCol", choices=names(table))
-                updateSelectInput(session,"boxColor", choices=c("None",names(table[maybeFactors])))
-                updateSelectInput(session,"boxX", choices=names(table))
-                updateSelectInput(session,"boxY", choices=names(table))
-                updateSelectInput(session,"scatterColor", choices=c("None", names(table[maybeFactors])))
-                updateSelectInput(session,"scatterFacet", choices=c(None = ".", names(table[maybeFactors])))
-                updateSelectInput(session,"scatterY", choices=names(table))
-                updateSelectInput(session,"scatterX", choices=names(table))
-            }
+
+            sessionsSegments <- c("All" = "total",
+                                      "Direct" = "(none)",
+                                      "Email" = "email",
+                                      "SEO" = "organic",
+                                      "Referral" = "referral",
+                                      "Social" = "social")
+                
             sd <- klib$sourceData()()
-            print("HERES SOuRCEDATA")
-            print(names(sd))
+            sd$gaData <- sd[[input$gaTable]]
+            sd$gaData$id <- sd$gaData$idprofile <- sd$gaData[['_timestamp']] <- NULL
+            print("NAMES of GADATA")
+            print(names(sd$gaData))
+            updateSelectInput(session, "gaMetric", choices=c("Select"="",names(sd$gaData)))
+            updateSelectInput(session, "gaDimension", choices=c("Select"="",names(sd$gaData)))
             sd
-            # this library method returns
-            # klib$loadTable("sd",input$table)
-            #table <- klib$sourceData()()[[input$gaTable]]
-            
-            # update data-dependent inputs depending
-            
-            # return the table
-            # table
         } else {
             NULL
         }
@@ -87,153 +81,157 @@ shinyServer(function(input, output, session) {
     ga_data <- reactive({
         if (input$gaTable != "") {
             gadata <- sourceData()[[input$gaTable]]
-            
-            gadata$sessions <- as.numeric(gadata$sessions)
             gadata$date <- as.Date(gadata$date)
+            if (input$gaMetric == "" || input$gaDimension == "") {
+                return(NULL)
+            }
+            gadata$metric <- as.numeric(gadata[[input$gaMetric]])
+            gadata$dimension <- as.factor(gadata[[input$gaDimension]])
             # remove unused columns
-            gadata$id <- gadata$idprofile <- gadata[['_timestamp']] <- NULL
+            gadata <- gadata[,names(gadata) %in% c("dimension", "metric", "date")]
             # get totals
-            data <- tidyr::spread(gadata, medium, sessions)
+            data <- tidyr::spread(gadata, dimension, metric)
             data$total <- rowSums(as.matrix(data[,-1]), na.rm=T)
-            
+            # update the segment select input with our new columnnames
+            updateSelectInput(session,"gaSegment",choices=names(data[,-1]))
             data
         } else {
             return(NULL)
         }
     })
   
-  anomalyData <- reactive({
-    data <- ga_data()
-    choice <- input$medium_select
-    ## make reactive to choice
-    agg    <- input$agg_select
+    anomalyData <- reactive({
+        data <- ga_data()
+        choice <- input$gaSegment
+        ## make reactive to choice
+        agg    <- input$agg_select
     
-    agg_data <- aggregate_data(data[,c('date', choice)], agg)
-    ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = 0.05))
+        agg_data <- aggregate_data(data[,c('date', choice)], agg)
+        ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = 0.05))
     
-    if(!is.error(ad)){
-      return(ad)
-    } else {
-      NULL
-    }
+        if(!is.error(ad)){
+            return(ad)
+        } else {
+            NULL
+        }
     
-  })
+    })
   
-  anomalyData2 <- reactive({
-    data <- ga_data()
-    choice <- input$medium_select2
-    ## make reactive to choice
-    agg    <- input$agg_select2
-    max_a <- input$max_anoms
+    anomalyData2 <- reactive({
+        data <- ga_data()
+        choice <- input$medium_select2
+        ## make reactive to choice
+        agg    <- input$agg_select2
+        max_a <- input$max_anoms
     
-    agg_data <- aggregate_data(data[,c('date', choice)], agg)
-    ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = max_a))
+        agg_data <- aggregate_data(data[,c('date', choice)], agg)
+        ad <- try(anomalyDetect(agg_data[,c('date', choice)], direction="both", max_anoms = max_a))
     
-    if(!is.error(ad)){
-      return(ad)
-    } else {
-      NULL
-    }
-  })
+        if(!is.error(ad)){
+            return(ad)
+        } else {
+            NULL
+        }
+    })
   
-  output$anomalyPlot <- renderPlot({
-    anomalyData2()$plot
-  })
+    output$anomalyPlot <- renderPlot({
+        anomalyData2()$plot
+    })
   
-  output$anomalyTable <- DT::renderDataTable({
-    a_table <- anomalyData2()$anoms
-    a_table$timestamp <- as.Date(as.character(a_table$timestamp))
-    names(a_table) <- c("Anomaly Date", "Value")
-    a_table 
-  })
+    output$anomalyTable <- DT::renderDataTable({
+        a_table <- anomalyData2()$anoms
+        a_table$timestamp <- as.Date(as.character(a_table$timestamp))
+        names(a_table) <- c("Anomaly Date", "Value")
+        a_table 
+    })
   
-  output$date_shown <- renderText({
-    pdata <- plot_date_data()
-    min_date <- as.character(min(pdata$date))
-    max_date <- as.character(max(pdata$date))
-    paste0(min_date, " to ", max_date)
-  })
+        output$date_shown <- renderText({
+        pdata <- plot_date_data()
+        min_date <- as.character(min(pdata$date))
+        max_date <- as.character(max(pdata$date))
+        paste0(min_date, " to ", max_date)
+    })
   
-  plot_date_data <- reactive({
-    data <- ga_data()
-    if(is.null(data)){
-      return(NULL)
-    }
+    plot_date_data <- reactive({
+        data <- ga_data()
+        if(is.null(data)){
+            return(NULL)
+        }
     
-    choice <- input$medium_select
-    plot1_dates <- input$plot1_date_window
+        choice <- input$gaSegment
+        plot1_dates <- input$plot1_date_window
     
-    min_date <- plot1_dates[1]
-    max_date <- plot1_dates[2]
+        min_date <- plot1_dates[1]
+        max_date <- plot1_dates[2]
     
-    pdata <- data[data$date > min_date &
+        pdata <- data[data$date > min_date &
                     data$date < max_date,]
     
-    pdata <- pdata[,colnames(pdata) %in% c("date", choice)]
+        pdata <- pdata[,colnames(pdata) %in% c("date", choice)]
     
-    pdata
-  })
+        pdata
+    })
   
-  output$heatmap <- renderD3heatmap({
+    output$heatmap <- renderD3heatmap({
     #     validate(
     #       need(is.null(plot_date_data()), "Plot data")
     #     )
     
-    hm_data <- plot_date_data()
+        hm_data <- plot_date_data()
     
-    week_pad <- period_function_generator("week", pad=T)
+        week_pad <- period_function_generator("week", pad=T)
     
-    hm_data$wday <- lubridate::wday(hm_data$date, label=T)
+        hm_data$wday <- lubridate::wday(hm_data$date, label=T)
     
-    hm_data$week <- paste0(year(hm_data$date), 
+        hm_data$week <- paste0(year(hm_data$date), 
                            " W", 
                            week_pad(hm_data$date)
-    )
+        )
     
-    names(hm_data) <- c("date", "sessions", "wday", "week")
+        names(hm_data) <- c("date", "sessions", "wday", "week")
     
-    hm_data <- tbl_df(hm_data)
+        hm_data <- tbl_df(hm_data)
+        
+        # sum up any duplicates
+        hm_data_grp <- group_by(hm_data,date,wday,week) 
+        hm_data <- summarise(hm_data_grp, sessions = sum(sessions),  na.rm=T)
     
-    # sum up any duplicates
-    hm_data_grp <- group_by(hm_data,date,wday,week) 
-    hm_data <- summarise(hm_data_grp, sessions = sum(sessions),  na.rm=T)
-    
-    hm_f <- tidyr::spread(hm_data[,c("sessions","wday","week")], 
+        hm_f <- tidyr::spread(hm_data[,c("sessions","wday","week")], 
                           wday, 
                           sessions)
     
-    hm_m <- as.matrix(hm_f %>% dplyr::select(-week))
-    row.names(hm_m) <- factor(hm_f$week)
+        hm_m <- as.matrix(hm_f %>% dplyr::select(-week))
+        row.names(hm_m) <- factor(hm_f$week)
     
-    hm_m[is.na(hm_m)] <- 0
+        hm_m[is.na(hm_m)] <- 0
     
-    d3heatmap(hm_m, 
+        d3heatmap(hm_m, 
               colors = "Blues",
               Rowv = FALSE,
               Colv = FALSE,
               labRow = row.names(hm_m),
               labCol = colnames(hm_m)
-    )
-  })
+        )
+    })
   
-  output$current_week <- renderText({
+    output$current_week <- renderText({
     
-    paste("Currently Week", week(today()))
+        paste("Currently Week", week(today()))
     
-  })
+    })
   
-  output$plot1 <- renderDygraph({
+    output$plot1 <- renderDygraph({
     
-    data   <- ga_data()
-    choice <- input$medium_select
-    agg    <- input$agg_select
-    events <- eventData()
-    anomalies <- anomalyData()$anoms
+        data   <- ga_data()
+        choice <- input$gaSegment
+        agg    <- input$agg_select
+        events <- eventData()
+        anomalies <- anomalyData()$anoms
     
-    agg_data <- data[,c('date', choice)]
-    names(agg_data) <- c('date', 'metric')
+        agg_data <- data[,c('date', choice)]
+        names(agg_data) <- c('date', 'metric')
     
-    agg_data <- aggregate_data(data[,c('date', choice)], agg)
+        agg_data <- aggregate_data(data[,c('date', choice)], agg)
     
     #     ## aggregate data if not agg == date
     #     if(agg %in% c('week', 'month', 'year')){
@@ -251,71 +249,66 @@ shinyServer(function(input, output, session) {
     #       agg_data <- data.frame(agg_data)
     #     }
     
-    ## dygraph needs a time-series, zoo makes it easier
-    ts_data <- zoo(agg_data[,choice], 
+        ## dygraph needs a time-series, zoo makes it easier
+        ts_data <- zoo(agg_data[,choice], 
                    order.by = agg_data[,'date'])
     
-    start <- Sys.Date() - 450
-    end <- Sys.Date() - 1
+        start <- Sys.Date() - 450
+        end <- Sys.Date() - 1
     
-    d <- dygraph(ts_data, main=str_to_title(paste(choice, "Sessions "))) %>%
-      dyRangeSelector(dateWindow = c(start, end)) %>%
-      dySeries("V1", color = "#8a48a4", label = str_to_title(choice) )
+        d <- dygraph(ts_data, main=str_to_title(paste(choice, "Sessions "))) %>%
+            dyRangeSelector(dateWindow = c(start, end)) %>%
+            dySeries("V1", color = "#8a48a4", label = str_to_title(choice) )
     
-    ## a dreaded for loop, but it makes sense for this?
-    if(!is.null(events)){
-      for(i in 1:length(events$date)){
-        d <- d %>% dyEvent(events$date[i], label = events$eventname[i]) 
-      }
-    }
-    if(!is.null(anomalies) && nrow(anomalies) > 0){
-      for(i in 1:length(anomalies$timestamp))
-        d <- d %>% dyAnnotation(anomalies$timestamp[i], 
+        ## a dreaded for loop, but it makes sense for this?
+        if(!is.null(events)){
+            for(i in 1:length(events$date)){
+                d <- d %>% dyEvent(events$date[i], label = events$eventname[i]) 
+            }
+        }
+        if(!is.null(anomalies) && nrow(anomalies) > 0){
+            for(i in 1:length(anomalies$timestamp))
+                d <- d %>% dyAnnotation(anomalies$timestamp[i], 
                                 text = paste("Anomaly"),
                                 tooltip = paste("Anomaly:", anomalies$anoms[i]),
                                 attachAtBottom = T,
                                 width = 60,
                                 height = 25)
-    }
+        }
     
-    return(d)
+        return(d)
     
-  })
+    })
   
-  output$WoW <- renderValueBox({
+    output$WoW <- renderValueBox({
     
-    data <- ga_data()
-    choice <- input$medium_select
-    
-    wow_data <- data[,c('date', choice)]
-    
-    valueBoxTimeOnTime(wow_data, "week")
-    
-  })
+        data <- ga_data()
+        choice <- input$gaSegment
+        
+        wow_data <- data[,c('date', choice)]
+        
+        valueBoxTimeOnTime(wow_data, "week")
+    })
   
-  output$MoM <- renderValueBox({
+    output$MoM <- renderValueBox({
+        data <- ga_data()
+        choice <- input$gaSegment
     
-    data <- ga_data()
-    choice <- input$medium_select
+        mom_data <- data[,c('date', choice)]
     
-    mom_data <- data[,c('date', choice)]
-    
-    valueBoxTimeOnTime(mom_data, "month")
-    
-    
-  })
+        valueBoxTimeOnTime(mom_data, "month")
+    })
   
-  output$YoY <- renderValueBox({
+    output$YoY <- renderValueBox({
     
-    data <- ga_data()
-    choice <- input$medium_select
+        data <- ga_data()
+        choice <- input$gaSegment
+        
+        yoy_data <- data[,c('date', choice)]
+        
+        valueBoxTimeOnTime(yoy_data, "monthYear")
     
-    yoy_data <- data[,c('date', choice)]
-    
-    valueBoxTimeOnTime(yoy_data, "monthYear")
-    
-    
-  })
+    })
   
   eventData <- reactive({
     eventUploaded <- input$eventUploadFile
